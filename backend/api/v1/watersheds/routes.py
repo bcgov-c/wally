@@ -4,6 +4,8 @@ Endpoints for returning statistics about watersheds
 from logging import getLogger
 import datetime
 import json
+import requests
+import pprint
 from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
@@ -26,7 +28,8 @@ from api.v1.watersheds.controller import (
     get_stream_inventory_report_link_for_region,
     get_scsb2016_input_stats
 )
-from api.v1.hydat.controller import (get_stations_in_area)
+from api.v1.hydat.controller import (get_stations_in_area, get_fasstr_longterm_summary)
+from api.v1.hydat.routes import get_station
 from api.v1.watersheds.schema import (
     GeneratedWatershedDetails
 )
@@ -153,11 +156,11 @@ def watershed_stats(
         wd["drainage_area"],
         wd["solar_exposure"],
         wd["average_slope"])
+    
+     # hydro stations from federal source
+    hydrometric_stations = get_stations_in_area(db, shape(watershed.geometry))
 
     scsb2016_input_stats = get_scsb2016_input_stats(db)
-
-    # hydro stations from federal source
-    hydrometric_stations = get_stations_in_area(db, shape(watershed.geometry))
 
     data = {
         "watershed_name": watershed.properties.get("name", None),
@@ -171,21 +174,114 @@ def watershed_stats(
         "scsb2016_input_stats": scsb2016_input_stats,
         "hydrometric_stations": hydrometric_stations,
         "generated_watershed_id": watershed_data.generated_watershed_id
+        
     }
 
     if format == 'xlsx':
-        licence_data = surface_water_rights_licences(watershed_poly)
-        # TODO add approvals data to xlsx output
-        # approvals_data = surface_water_approval_points(watershed_poly)
+
+        #For each station found in the watershed we will add the station number to a new array. 
+        #Then for the first station in that list, retrieve the monthly data to calculate averages. 
+    
+        stationNumbers = []
+        for station in hydrometric_stations:
+            stationNumber = station.properties.station_number  # Access the 'stream_flows_url' property
+            if stationNumber:
+                stationNumbers.append(stationNumber)
+        
+
+        #Take the first Hydro Station and get the FASSTR DATA
+        #Extract Stations annual average, and monthly data
+        #Creating a new array which will be passed to the excel export
+        # # TO DO: PENDING REVIEW FROM TESTERS - Make multiple templates to handle more than 1 hydat station per report.  
+        
+        try:
+            if stationNumbers:
+                flowData = get_fasstr_longterm_summary(db, stationNumbers[0])
+                StationMean = flowData.mean
+                flowMonths = flowData.months
+                flowMean = []
+                for month in flowMonths:
+                    flowMean.append((month.mean / StationMean * 100))
+
+                # Only want to do this when a hydrometric station is found within the area
+                # Extracting data for date range from Hydro Metric station
+                # This is not included in the FASSTR data, so will be extracted directly from the 
+                # hydrometric station as Station number is available at this point.
+                stationNumber = hydrometric_stations[0].properties.station_number
+                stationYearData = get_station(stationNumber, db)
+                startYear = min(stationYearData.flow_years)
+                endYear = max(stationYearData.flow_years)
+                data["flowData"] = flowData
+                data["startYear"] = startYear
+                data["endYear"] = endYear
+                data["flowMean"] = flowMean
+                    
+        except Exception as e:
+            logger.error("Error:", e)
+            logger.error("Hydrometric station has incomplete information")
+        
+        try:
+            #Simliar to above but using Wally modeled data instead of FASSTR
+            #Get the scsb2016 data, calculate the annual discharge for baseline. 
+            #Make a list of the monthly discharges and calculate how that compare to the annual average
+            #This will be added to the excel export
+            monthlyDischarge = model_output_as_dict(scsb2016_model)
+            baseLine = monthlyDischarge["mad"]
+            monthlyDischarge = monthlyDischarge["monthly_discharge"]
+            monthAverages = []
+            for key in monthlyDischarge:
+                monthAverages.append(monthlyDischarge[key]["model_result"] / baseLine * 100)
+            data["baseLineMean"] = monthAverages
+        except Exception as e:
+            logger.error("Error:", e)
+            logger.info("Error loading scbc2016 data for selected watershed")
+        
+
+
+        try: 
+            # Retrieve approval data
+            # Add all of the properties for each object returned to the data object
+            # Once data is passed to excel will loop through to extract each approval in template
+            approvals_data = surface_water_approval_points(watershed_poly)
+            if approvals_data.approvals and approvals_data.approvals.features:
+                data["approvals_data"] = [dict(**x.properties)
+                                    for x in approvals_data.approvals.features]
+        except Exception as e:
+            logger.error("Error:", e)
+            logger.info("Error finding approval points for selected watershed")
+        
         data['generated_date'] = datetime.datetime.now().strftime(
             "%Y-%m-%d %H:%M:%S")
 
-        if licence_data.licences and licence_data.licences.features:
-            data['licences'] = [dict(**x.properties)
-                                for x in licence_data.licences.features]
-            data['inactive_licences'] = [dict(**x.properties)
-                                         for x in licence_data.inactive_licences.features]
-            data['licences_count_pod'] = len(licence_data.licences.features)
+
+        try:
+            #Get lisence data, for each licence add it to a dictionary and attach to the data object
+            #Will use a loop in the excel doc to iterate through and display each of the licences
+            licence_data = surface_water_rights_licences(watershed_poly)
+            if licence_data.licences and licence_data.licences.features:
+                data['licences'] = [dict(**x.properties)
+                                    for x in licence_data.licences.features]
+                data['inactive_licences'] = [dict(**x.properties)
+                                            for x in licence_data.inactive_licences.features]
+                data['licences_count_pod'] = len(licence_data.licences.features)
+        except Exception as e:
+            logger.error("Error:", e)
+            logger.info("Error finding approval licenses for selected watershed")
+
+
+        try:
+            #Get Fish obvservation data to add to excel export
+            #Add each type of fish species returned from the Known observations to data in a new dictionary
+            #Important to only do it for fish_data.fish_species_data otherwise it will add all observations to the dictionary
+            #once these have been added to the dictionary created a podcount to use an index when importing to excel
+            
+            fish_data = known_fish_observations(watershed_poly)
+            if fish_data and fish_data.fish_species_data:
+                data["fish_data"] = [dict(**x)
+                                    for x in fish_data.fish_species_data]
+        except Exception as e:
+            logger.error("Error:", e)
+            logger.info("Error finding fish observation data for selected watershed")
 
         return export_summary_as_xlsx(jsonable_encoder(data))
 

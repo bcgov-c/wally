@@ -35,6 +35,27 @@ def normalize_quantity(qty, qty_unit: str):
     else:
         # could not interpret QUANTITY_UNIT value
         return None
+    
+def normalize_quantity_seconds(qty, qty_unit: str):
+    """ takes a qty and a unit (as a string) and returns the quantity in m3/second
+        accepts:
+        m3/sec
+        m3/day
+        m3/year
+        Returns None if QUANTITY_UNITS doesn't match one of the options.
+    """
+
+    qty_unit = qty_unit.strip()
+
+    if qty_unit == 'm3/year':
+        return qty / (60 * 60 * 24 * 365)
+    elif qty_unit == 'm3/day':
+        return qty / (60 * 60 * 24)
+    elif qty_unit == 'm3/sec':
+        return qty 
+    else:
+        # could not interpret QUANTITY_UNIT value
+        return None
 
 
 def get_file_ext(file_path: str) -> str:
