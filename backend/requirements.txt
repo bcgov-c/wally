@@ -85,7 +85,7 @@ git+https://github.com/woodcrafty/PyETo.git#egg=pyeto
 pandas==1.0.3
 starlette-exporter==0.3.0
 xgboost==1.2.0
-scikit-learn==0.23.2
+scikit-learn==1.0.1
 minio==6.0.0
 python-magic==0.4.18
 pygdal==2.4.0.6
