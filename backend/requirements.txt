@@ -20,7 +20,7 @@ cssutils==1.0.2
 dnspython==1.16.0
 email-validator==1.0.4
 emails==0.5.15
-fastapi==0.65.2
+fastapi==0.109.1
 Fiona==1.8.18
 GeoAlchemy2==0.6.3
 geojson==2.4.1
