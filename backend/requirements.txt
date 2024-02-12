@@ -57,7 +57,7 @@ pytest==5.0.1
 python-dateutil==2.8.0
 python-dotenv==0.14.0
 python-editor==1.0.4
-python-multipart==0.0.5
+python-multipart==0.0.7
 pytz==2019.1
 rasterio==1.2.1
 requests==2.25.1
